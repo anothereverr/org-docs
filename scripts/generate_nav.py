@@ -76,6 +76,8 @@ MKDOCS_TEMPLATE: dict[str, Any] = {
         "admonition",
         {"toc": {"permalink": True}},
     ],
+    "extra_css": ["_assets/custom.css"],
+    "extra_javascript": ["_assets/pdf_button.js"],
 }
 
 
