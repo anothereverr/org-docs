@@ -1,0 +1,74 @@
+name: Manual Sync (Test, No Deploy)
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_slug:
+        description: 'Repo name or slug to test (required)'
+        required: true
+        type: string
+      log_level:
+        description: 'Log verbosity'
+        type: choice
+        default: DEBUG
+        options: [DEBUG, INFO, WARNING, ERROR]
+
+# Allow manual syncs to run in parallel — they are read-only tests
+concurrency:
+  group: wiki-sync-manual-${{ inputs.repo_slug }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Sync single repo (dry-run capable)
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_ORG:   ${{ vars.GH_ORG }}
+          LOG_LEVEL: ${{ inputs.log_level }}
+        run: |
+          python scripts/sync_wikis.py \
+            --org         "$GH_ORG" \
+            --docs-dir    docs \
+            --cache-dir   wiki_cache \
+            --repo-filter "${{ inputs.repo_slug }}" \
+            --parallelism 1 \
+            --log-level   "$LOG_LEVEL"
+
+      - name: Upload synced docs as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: synced-docs-${{ inputs.repo_slug }}
+          path: docs/
+          retention-days: 3
+
+      - name: Build site (validation only — not deployed)
+        run: mkdocs build
+        continue-on-error: true
+
+      - name: Upload built site as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: built-site-${{ inputs.repo_slug }}
+          path: site/
+          retention-days: 3

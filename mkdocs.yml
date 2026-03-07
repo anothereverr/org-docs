@@ -1,0 +1,43 @@
+# This file is AUTO-REGENERATED on every sync run by scripts/generate_nav.py.
+# Do not edit the nav: section manually — changes will be overwritten.
+# To configure theme, plugins, or extensions, edit scripts/generate_nav.py → MKDOCS_TEMPLATE.
+
+site_name: Organization Documentation
+site_url: ''
+repo_url: ''
+docs_dir: docs
+theme:
+  name: material
+  features:
+  - navigation.tabs
+  - navigation.sections
+  - navigation.top
+  - navigation.indexes
+  - search.suggest
+  - search.highlight
+  - content.code.copy
+  palette:
+  - scheme: default
+    primary: indigo
+    accent: indigo
+    toggle:
+      icon: material/brightness-7
+      name: Switch to dark mode
+  - scheme: slate
+    primary: indigo
+    accent: indigo
+    toggle:
+      icon: material/brightness-4
+      name: Switch to light mode
+plugins:
+- search
+markdown_extensions:
+- pymdownx.highlight
+- pymdownx.superfences
+- pymdownx.inlinehilite
+- pymdownx.tabbed
+- admonition
+- toc:
+    permalink: true
+nav:
+- Home: index.md
