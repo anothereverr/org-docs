@@ -28,7 +28,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write   # commit updated docs/ and mkdocs.yml to main
+  contents: write   # needed by mkdocs gh-deploy to push to gh-pages branch
   pages: write      # deploy to GitHub Pages
   id-token: write   # OIDC token for Pages deployment
 
@@ -44,13 +44,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Use the built-in GITHUB_TOKEN for checkout/push.
-          # It always has contents:write for this repo (declared in permissions above).
+          # GITHUB_TOKEN always has contents:write for this repo.
           # GH_PAT is reserved for GitHub API calls and wiki cloning only.
           token: ${{ secrets.GITHUB_TOKEN }}
-          # Full history needed so git rebase works correctly when incorporating
-          # manual pushes that happened after the runner started.
-          fetch-depth: 0
 
       # ----------------------------------------------------------------
       # 2. Set up Python with pip caching for faster subsequent runs
@@ -74,8 +70,7 @@ jobs:
         run: |
           git config user.name  "wiki-sync-bot"
           git config user.email "wiki-sync-bot@users.noreply.github.com"
-          # Explicitly embed the PAT in the remote URL so git push authenticates
-          # correctly regardless of how actions/checkout set up credentials.
+          # Embed the token in the remote URL so mkdocs gh-deploy can push to gh-pages.
           git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
 
       # ----------------------------------------------------------------
@@ -100,61 +95,17 @@ jobs:
             --log-level  "${LOG_LEVEL:-INFO}"
 
       # ----------------------------------------------------------------
-      # 6. Incorporate any remote commits that arrived after our checkout.
-      #    This must happen BEFORE git add/commit so our commit sits cleanly
-      #    on top of the latest remote HEAD and git push never gets rejected.
-      #    The docs/ files are only on disk at this point (not staged), so
-      #    they survive the rebase untouched.
-      # ----------------------------------------------------------------
-      - name: Fetch and rebase onto latest remote main
-        if: inputs.dry_run != true
-        run: |
-          git fetch origin main
-          # --autostash saves unstaged changes (docs/, mkdocs.yml written by the
-          # sync step) before rebasing, then restores them after. This lets the
-          # rebase run cleanly even though the sync already modified tracked files.
-          git rebase --autostash origin/main
-
-      # ----------------------------------------------------------------
-      # 7. Detect whether docs/ or mkdocs.yml changed
-      #    (skips commit + deploy if there is nothing new)
-      # ----------------------------------------------------------------
-      - name: Check for changes
-        id: changes
-        run: |
-          git add docs/ mkdocs.yml
-          if git diff --staged --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "No content changes detected."
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "Content changes detected:"
-            git diff --staged --stat
-          fi
-
-      # ----------------------------------------------------------------
-      # 8. Commit updated docs to main (skipped on dry-run or no changes)
-      # ----------------------------------------------------------------
-      - name: Commit updated docs
-        if: steps.changes.outputs.changed == 'true' && inputs.dry_run != true
-        run: |
-          git commit -m "chore: sync wikis $(date -u +%Y-%m-%dT%H:%M:%SZ) [skip ci]"
-
-      - name: Push to main
-        if: steps.changes.outputs.changed == 'true' && inputs.dry_run != true
-        run: git push origin main
-
-      # ----------------------------------------------------------------
-      # 9. Build MkDocs site
-      #    Run even when there are no content changes so a deploy always
-      #    reflects the current state of main.
+      # 6. Build MkDocs site directly from the synced docs/ on disk.
+      #    We do NOT commit docs/ back to main — the site is always built
+      #    fresh from wiki content on each run. This avoids all git race
+      #    conditions between the runner and manual developer pushes.
       # ----------------------------------------------------------------
       - name: Build MkDocs site
         if: inputs.dry_run != true
         run: mkdocs build
 
       # ----------------------------------------------------------------
-      # 10. Deploy to GitHub Pages
+      # 7. Deploy to GitHub Pages
       #    --no-history keeps gh-pages lean (no accumulating history of
       #    auto-generated content).
       # ----------------------------------------------------------------
@@ -165,7 +116,7 @@ jobs:
         run: mkdocs gh-deploy --force --no-history
 
       # ----------------------------------------------------------------
-      # 11. Print a summary to the Actions run page
+      # 8. Print a summary to the Actions run page
       # ----------------------------------------------------------------
       - name: Job summary
         if: always()
@@ -178,7 +129,6 @@ jobs:
           echo "| Triggered by | ${{ github.event_name }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Dry run | ${{ inputs.dry_run || 'false' }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Repo filter | ${{ inputs.repo_filter || '(all)' }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Content changed | ${{ steps.changes.outputs.changed }} |" >> "$GITHUB_STEP_SUMMARY"
           if [ -n "${{ vars.MKDOCS_SITE_URL }}" ]; then
             echo "| Site URL | ${{ vars.MKDOCS_SITE_URL }} |" >> "$GITHUB_STEP_SUMMARY"
           fi
