@@ -9,6 +9,7 @@ theme:
   - navigation.sections
   - navigation.top
   - navigation.indexes
+  - navigation.breadcrumbs
   - search.suggest
   - search.highlight
   - content.code.copy
@@ -33,8 +34,16 @@ markdown_extensions:
 - pymdownx.inlinehilite
 - pymdownx.tabbed
 - admonition
+- attr_list
+- md_in_html
 - toc:
     permalink: true
+extra_css:
+- _assets/custom.css
+extra_javascript:
+- _assets/pdf_button.js
+hooks:
+- hooks/edit_wiki_url.py
 nav:
 - Home: index.md
 - Repositories:
