@@ -44,8 +44,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Use the PAT so the push step can bypass branch protection if needed
-          token: ${{ secrets.GH_PAT }}
+          # Use the built-in GITHUB_TOKEN for checkout/push.
+          # It always has contents:write for this repo (declared in permissions above).
+          # GH_PAT is reserved for GitHub API calls and wiki cloning only.
+          token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 1
 
       # ----------------------------------------------------------------
@@ -72,7 +74,7 @@ jobs:
           git config user.email "wiki-sync-bot@users.noreply.github.com"
           # Explicitly embed the PAT in the remote URL so git push authenticates
           # correctly regardless of how actions/checkout set up credentials.
-          git remote set-url origin "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}.git"
+          git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
 
       # ----------------------------------------------------------------
       # 5. Run the sync pipeline
@@ -141,7 +143,7 @@ jobs:
       - name: Deploy to GitHub Pages
         if: inputs.dry_run != true
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: mkdocs gh-deploy --force --no-history
 
       # ----------------------------------------------------------------
