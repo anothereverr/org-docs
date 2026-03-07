@@ -48,7 +48,9 @@ jobs:
           # It always has contents:write for this repo (declared in permissions above).
           # GH_PAT is reserved for GitHub API calls and wiki cloning only.
           token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 1
+          # Full history needed so git rebase works correctly when incorporating
+          # manual pushes that happened after the runner started.
+          fetch-depth: 0
 
       # ----------------------------------------------------------------
       # 2. Set up Python with pip caching for faster subsequent runs
@@ -98,7 +100,20 @@ jobs:
             --log-level  "${LOG_LEVEL:-INFO}"
 
       # ----------------------------------------------------------------
-      # 6. Detect whether docs/ or mkdocs.yml changed
+      # 6. Incorporate any remote commits that arrived after our checkout.
+      #    This must happen BEFORE git add/commit so our commit sits cleanly
+      #    on top of the latest remote HEAD and git push never gets rejected.
+      #    The docs/ files are only on disk at this point (not staged), so
+      #    they survive the rebase untouched.
+      # ----------------------------------------------------------------
+      - name: Fetch and rebase onto latest remote main
+        if: inputs.dry_run != true
+        run: |
+          git fetch origin main
+          git rebase origin/main
+
+      # ----------------------------------------------------------------
+      # 7. Detect whether docs/ or mkdocs.yml changed
       #    (skips commit + deploy if there is nothing new)
       # ----------------------------------------------------------------
       - name: Check for changes
@@ -115,7 +130,7 @@ jobs:
           fi
 
       # ----------------------------------------------------------------
-      # 7. Commit updated docs to main (skipped on dry-run or no changes)
+      # 8. Commit updated docs to main (skipped on dry-run or no changes)
       # ----------------------------------------------------------------
       - name: Commit updated docs
         if: steps.changes.outputs.changed == 'true' && inputs.dry_run != true
@@ -124,15 +139,10 @@ jobs:
 
       - name: Push to main
         if: steps.changes.outputs.changed == 'true' && inputs.dry_run != true
-        run: |
-          # Pull remote changes before pushing to avoid rejected push errors.
-          # This can happen when manual pushes occur between the checkout and
-          # this step. --rebase keeps history linear.
-          git pull --rebase origin main
-          git push origin main
+        run: git push origin main
 
       # ----------------------------------------------------------------
-      # 8. Build MkDocs site
+      # 9. Build MkDocs site
       #    Run even when there are no content changes so a deploy always
       #    reflects the current state of main.
       # ----------------------------------------------------------------
@@ -141,7 +151,7 @@ jobs:
         run: mkdocs build
 
       # ----------------------------------------------------------------
-      # 9. Deploy to GitHub Pages
+      # 10. Deploy to GitHub Pages
       #    --no-history keeps gh-pages lean (no accumulating history of
       #    auto-generated content).
       # ----------------------------------------------------------------
@@ -152,7 +162,7 @@ jobs:
         run: mkdocs gh-deploy --force --no-history
 
       # ----------------------------------------------------------------
-      # 10. Print a summary to the Actions run page
+      # 11. Print a summary to the Actions run page
       # ----------------------------------------------------------------
       - name: Job summary
         if: always()
