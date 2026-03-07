@@ -124,7 +124,12 @@ jobs:
 
       - name: Push to main
         if: steps.changes.outputs.changed == 'true' && inputs.dry_run != true
-        run: git push origin main
+        run: |
+          # Pull remote changes before pushing to avoid rejected push errors.
+          # This can happen when manual pushes occur between the checkout and
+          # this step. --rebase keeps history linear.
+          git pull --rebase origin main
+          git push origin main
 
       # ----------------------------------------------------------------
       # 8. Build MkDocs site
