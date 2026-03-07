@@ -161,6 +161,7 @@ jobs:
               w("| Field | Value |")
               w("|---|---|")
               w(f"| Repos synced \u2705 | {d['repos_ok']} |")
+              w(f"| Repos unchanged \u23e9 | {d.get('repos_unchanged', 0)} |")
               w(f"| Repos skipped \u23ed\ufe0f | {d['repos_skipped']} |")
               w(f"| Repos failed \u274c | {d['repos_failed']} |")
               w(f"| Broken links \u26a0\ufe0f | {len(d['broken_links'])} |")

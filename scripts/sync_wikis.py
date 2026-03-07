@@ -27,6 +27,7 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -42,6 +43,39 @@ from discover_wikis import discover_wikis
 from generate_nav import generate_mkdocs_yml
 from utils import setup_logging
 
+
+# ---------------------------------------------------------------------------
+# Sync-state helpers
+# ---------------------------------------------------------------------------
+
+def _load_sync_state(cache_dir: Path) -> dict:
+    """
+    Load the last-known HEAD SHA and serialised CopyResult for each repo slug.
+
+    Returns an empty dict on a cache miss or if the file is unreadable.
+    The state is stored at ``cache_dir/sync_state.json`` so it persists
+    alongside the git clones in the ``wiki_cache/`` directory.
+    """
+    path = cache_dir / "sync_state.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logging.getLogger("wiki-sync").warning(
+                "sync_state.json could not be read — treating all repos as new: %s", exc
+            )
+    return {}
+
+
+def _save_sync_state(cache_dir: Path, state: dict) -> None:
+    """Persist the sync state (SHA + CopyResult subset) for the next run."""
+    path = cache_dir / "sync_state.json"
+    path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Main sync pipeline
+# ---------------------------------------------------------------------------
 
 def run_sync(
     org: str,
@@ -94,14 +128,30 @@ def run_sync(
     docs_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # Load the previous run's state: {slug: {"sha": "...", "result": {...}}}
+    sync_state = _load_sync_state(cache_dir)
+    logger.info("Loaded sync state for %d repo(s).", len(sync_state))
+
     successful_results: list[CopyResult] = []
     failed_repos: list[str] = []
     skipped_repos: list[str] = []
+    unchanged_repos: list[str] = []
 
-    def _process_repo(repo_meta: dict) -> tuple[str, CopyResult | None, str]:
+    def _process_repo(repo_meta: dict) -> tuple[str, CopyResult | None, str, str]:
         """
-        Clone and copy a single repo. Returns (name, result_or_None, status).
-        status is one of: "ok", "skipped", "error"
+        Clone and copy a single repo.
+
+        Returns ``(name, result_or_None, status, sha)``.
+        *status* is one of: ``"ok"`` | ``"unchanged"`` | ``"skipped"`` | ``"error"``
+        *sha* is the current HEAD SHA (empty string when unavailable).
+
+        Fast path (SHA unchanged):
+            Restores the pre-processed content from ``wiki_cache/{slug}.processed/``
+            directly into ``docs/{slug}/`` without re-running the regex rewrites.
+
+        Slow path (SHA changed or no prior state):
+            Runs the full copy + rewrite pipeline, then mirrors the output to
+            ``wiki_cache/{slug}.processed/`` for the next run's fast path.
         """
         name = repo_meta["name"]
         slug = repo_meta["slug"]
@@ -109,7 +159,7 @@ def run_sync(
 
         # Clone / update
         try:
-            wiki_path = clone_wiki(
+            clone_result = clone_wiki(
                 org=org,
                 repo_name=name,
                 token=token,
@@ -118,13 +168,36 @@ def run_sync(
             )
         except Exception as exc:
             repo_logger.error("Unexpected error cloning %s: %s", name, exc)
-            return name, None, "error"
+            return name, None, "error", ""
 
-        if wiki_path is None:
+        if clone_result is None:
             repo_logger.info("Wiki is empty or unreachable — skipping %s", name)
-            return name, None, "skipped"
+            return name, None, "skipped", ""
 
-        # Copy content
+        wiki_path, current_sha = clone_result
+
+        # ── Fast path: SHA unchanged ──────────────────────────────────────
+        stored = sync_state.get(slug, {})
+        if current_sha and stored.get("sha") == current_sha and stored.get("result"):
+            processed_dir = cache_dir / f"{slug}.processed"
+            if processed_dir.exists():
+                dest = docs_dir / slug
+                if dest.exists():
+                    shutil.rmtree(dest)
+                shutil.copytree(processed_dir, dest)
+                repo_logger.info(
+                    "SHA unchanged (%s) — restored %d page(s) from processed cache",
+                    current_sha[:8],
+                    len(stored["result"].get("pages", [])),
+                )
+                cached: CopyResult = dict(stored["result"])  # type: ignore[assignment]
+                cached["broken_links"] = []
+                cached["image_collisions"] = []
+                return name, cached, "unchanged", current_sha
+            # processed_dir missing (e.g. first run after adding this feature):
+            # fall through to the slow path so the cache gets populated.
+
+        # ── Slow path: full copy + rewrite ───────────────────────────────
         try:
             result = copy_wiki_content(
                 source_dir=wiki_path,
@@ -133,12 +206,26 @@ def run_sync(
             )
         except Exception as exc:
             repo_logger.error("Unexpected error copying content for %s: %s", name, exc)
-            return name, None, "error"
+            return name, None, "error", current_sha
 
-        return name, result, "ok"
+        # Mirror the processed output into wiki_cache so the next run can
+        # skip the regex rewrite step if the SHA has not changed.
+        processed_dir = cache_dir / f"{slug}.processed"
+        try:
+            if processed_dir.exists():
+                shutil.rmtree(processed_dir)
+            dest = docs_dir / slug
+            if dest.exists():
+                shutil.copytree(dest, processed_dir)
+        except Exception as exc:
+            repo_logger.warning("Could not save processed cache for %s: %s", slug, exc)
+
+        return name, result, "ok", current_sha
 
     # Use ThreadPoolExecutor for parallel network-bound git clones
     effective_parallelism = max(1, min(parallelism, len(all_repos)))
+
+    new_state: dict = {}
 
     with ThreadPoolExecutor(max_workers=effective_parallelism) as pool:
         future_to_repo = {
@@ -148,23 +235,48 @@ def run_sync(
 
         for future in as_completed(future_to_repo):
             repo_meta = future_to_repo[future]
+            slug = repo_meta["slug"]
             try:
-                name, result, status = future.result()
+                name, result, status, sha = future.result()
             except Exception as exc:
                 logger.error("Unhandled exception for %s: %s", repo_meta["name"], exc)
                 failed_repos.append(repo_meta["name"])
+                if slug in sync_state:
+                    new_state[slug] = sync_state[slug]
                 continue
 
-            if status == "ok" and result is not None:
+            if status in ("ok", "unchanged") and result is not None:
                 successful_results.append(result)
+                if sha:
+                    new_state[slug] = {
+                        "sha": sha,
+                        "result": {
+                            k: result[k]
+                            for k in ("slug", "pages", "images", "has_sidebar", "sidebar_structure")
+                        },
+                    }
+                if status == "unchanged":
+                    unchanged_repos.append(name)
             elif status == "skipped":
                 skipped_repos.append(name)
-            else:
+                # Preserve the previous state entry for skipped repos so a
+                # future run can still take the fast path if they reappear.
+                if slug in sync_state:
+                    new_state[slug] = sync_state[slug]
+            else:  # "error"
                 failed_repos.append(name)
+                if slug in sync_state:
+                    new_state[slug] = sync_state[slug]
 
+    # Persist the updated state for the next run
+    _save_sync_state(cache_dir, new_state)
+    logger.info("Sync state saved: %d repo(s) tracked.", len(new_state))
+
+    synced_count = len(successful_results) - len(unchanged_repos)
     logger.info(
-        "Sync complete: %d ok, %d skipped, %d failed.",
-        len(successful_results),
+        "Sync complete: %d synced, %d unchanged, %d skipped, %d failed.",
+        synced_count,
+        len(unchanged_repos),
         len(skipped_repos),
         len(failed_repos),
     )
@@ -202,13 +314,15 @@ def run_sync(
             for ic in r.get("image_collisions", [])
         ]
         summary = {
-            "repos_ok":         len(successful_results),
+            "repos_ok":         synced_count,
+            "repos_unchanged":  len(unchanged_repos),
             "repos_skipped":    len(skipped_repos),
             "repos_failed":     len(failed_repos),
             "broken_links":     all_broken,
             "image_collisions": all_collisions,
             "failed":           failed_repos,
             "skipped":          skipped_repos,
+            "unchanged":        unchanged_repos,
         }
         Path(summary_file).write_text(json.dumps(summary, indent=2), encoding="utf-8")
         logger.info("Summary written to %s", summary_file)
@@ -217,10 +331,11 @@ def run_sync(
     # Summary
     # ------------------------------------------------------------------
     logger.info("=== Sync finished ===")
-    logger.info("  Repos synced:  %d", len(successful_results))
-    logger.info("  Repos skipped: %d (empty or unreachable wikis)", len(skipped_repos))
-    logger.info("  Repos failed:  %d", len(failed_repos))
-    logger.info("  mkdocs.yml:    %s", mkdocs_path)
+    logger.info("  Repos synced:    %d", synced_count)
+    logger.info("  Repos unchanged: %d (SHA not changed since last sync)", len(unchanged_repos))
+    logger.info("  Repos skipped:   %d (empty or unreachable wikis)", len(skipped_repos))
+    logger.info("  Repos failed:    %d", len(failed_repos))
+    logger.info("  mkdocs.yml:      %s", mkdocs_path)
 
     # Return False if any repo had an unexpected error
     return len(failed_repos) == 0

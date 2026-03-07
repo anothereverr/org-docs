@@ -34,12 +34,16 @@ def clone_wiki(
     token: str,
     cache_dir: Path,
     timeout: int = 120,
-) -> Path | None:
+) -> tuple[Path, str] | None:
     """
     Clone or update the wiki for *repo_name* into *cache_dir*.
 
-    Returns the path to the cloned wiki directory, or None if the wiki
+    Returns ``(wiki_path, head_sha)`` on success, or ``None`` if the wiki
     is empty / unreachable (has_wiki=true but no pages were ever created).
+
+    *head_sha* is the current ``git rev-parse HEAD`` of the cloned wiki.
+    It is used by the sync orchestrator to skip copy + rewrite when the
+    content has not changed since the previous run.
 
     Authentication is embedded in the HTTPS URL. The token is never printed
     to stdout/stderr — all log output uses a masked URL.
@@ -53,9 +57,15 @@ def clone_wiki(
     safe_url = mask_token_in_url(clone_url, token)
 
     if wiki_dir.exists():
-        return _update_wiki(wiki_dir, clone_url, safe_url, logger, timeout)
+        wiki_path = _update_wiki(wiki_dir, clone_url, safe_url, logger, timeout)
     else:
-        return _clone_wiki(wiki_dir, clone_url, safe_url, logger, timeout)
+        wiki_path = _clone_wiki(wiki_dir, clone_url, safe_url, logger, timeout)
+
+    if wiki_path is None:
+        return None
+
+    sha = _get_head_sha(wiki_path)
+    return wiki_path, sha
 
 
 def _run_git(args: list[str], cwd: Path | None, timeout: int) -> subprocess.CompletedProcess:
@@ -168,6 +178,14 @@ def _update_wiki(
     return wiki_dir
 
 
+def _get_head_sha(wiki_dir: Path) -> str:
+    """Return the current HEAD commit SHA of a cloned wiki (empty string on failure)."""
+    result = _run_git(["rev-parse", "HEAD"], cwd=wiki_dir, timeout=10)
+    if result.returncode == 0:
+        return result.stdout.strip()
+    return ""
+
+
 def _detect_default_branch(
     wiki_dir: Path,
     clone_url: str,
@@ -255,7 +273,10 @@ def main() -> None:
     )
 
     if result:
-        print(f"Wiki cloned/updated at: {result}")
+        wiki_path, sha = result
+        print(f"Wiki cloned/updated at: {wiki_path}")
+        if sha:
+            print(f"HEAD SHA: {sha[:8]}")
     else:
         print("Wiki is empty or unreachable — skipped.")
         sys.exit(2)
