@@ -1,7 +1,3 @@
-# This file is AUTO-REGENERATED on every sync run by scripts/generate_nav.py.
-# Do not edit the nav: section manually — changes will be overwritten.
-# To configure theme, plugins, or extensions, edit scripts/generate_nav.py → MKDOCS_TEMPLATE.
-
 site_name: Organization Documentation
 site_url: ''
 repo_url: ''
@@ -41,3 +37,7 @@ markdown_extensions:
     permalink: true
 nav:
 - Home: index.md
+- Repositories:
+  - Oracle Alura Data Science Challenge 1:
+    - Home: oracle-alura-data-science-challenge-1/index.md
+    - Test Allura 1: oracle-alura-data-science-challenge-1/test-allura-1.md
