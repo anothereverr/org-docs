@@ -15,6 +15,7 @@ import logging
 import os
 import shutil
 from collections import namedtuple
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TypedDict
 
@@ -68,6 +69,9 @@ def copy_wiki_content(
     # Build known_pages set BEFORE rewriting so we can resolve wiki links
     known_pages = build_known_pages(source_dir)
 
+    # Timestamp used in the footer of every generated page
+    sync_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
     pages: list[str] = []
     images: list[str] = []
     sidebar_structure: list = []
@@ -113,7 +117,7 @@ def copy_wiki_content(
 
         # ---- Markdown files ----
         if ext == ".md":
-            page_broken = _process_markdown(src_file, dest, slug, known_pages, pages)
+            page_broken = _process_markdown(src_file, dest, slug, known_pages, pages, sync_time)
             broken_links.extend(page_broken)
             continue
 
@@ -150,6 +154,7 @@ def _process_markdown(
     slug: str,
     known_pages: set[str],
     pages: list[str],
+    sync_time: str = "",
 ) -> list:
     """
     Read, rewrite, and write a single markdown file.
@@ -173,6 +178,11 @@ def _process_markdown(
         return []
 
     content, broken = rewrite_content(content, known_pages, slug, source_file=src_file.name)
+
+    # Append a subtle footer indicating when the page was last synced.
+    # The horizontal rule provides visual separation from the page content.
+    if sync_time:
+        content = content.rstrip("\n") + f"\n\n---\n\n*Last synced from GitHub wiki · {sync_time}*\n"
 
     try:
         dest_file.write_text(content, encoding="utf-8")

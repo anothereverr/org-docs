@@ -2,8 +2,8 @@ name: Sync Wikis and Deploy
 
 on:
   schedule:
-    # Every 30 minutes
-    - cron: '*/30 * * * *'
+    # Every 2 hours (at minute 0)
+    - cron: '0 */2 * * *'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -64,7 +64,22 @@ jobs:
         run: pip install -r requirements.txt
 
       # ----------------------------------------------------------------
-      # 4. Configure git identity and credentials for the push step
+      # 4. Restore wiki_cache/ from a previous run.
+      #    Saving with a unique key (run_id) ensures every successful run
+      #    writes a fresh cache entry. Restoring with a prefix picks up
+      #    the most recent available snapshot, so clone_wiki.py only
+      #    needs to do `git fetch + reset` instead of a full clone.
+      # ----------------------------------------------------------------
+      - name: Restore wiki cache
+        uses: actions/cache@v4
+        with:
+          path: wiki_cache
+          key: wiki-cache-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            wiki-cache-${{ runner.os }}-
+
+      # ----------------------------------------------------------------
+      # 5. Configure git identity and credentials for the push step
       # ----------------------------------------------------------------
       - name: Configure git identity
         run: |
@@ -74,7 +89,7 @@ jobs:
           git remote set-url origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
 
       # ----------------------------------------------------------------
-      # 5. Run the sync pipeline
+      # 6. Run the sync pipeline
       # ----------------------------------------------------------------
       - name: Sync wikis
         env:
@@ -96,7 +111,7 @@ jobs:
             --summary-file sync_summary.json
 
       # ----------------------------------------------------------------
-      # 6. Build MkDocs site directly from the synced docs/ on disk.
+      # 7. Build MkDocs site directly from the synced docs/ on disk.
       #    We do NOT commit docs/ back to main — the site is always built
       #    fresh from wiki content on each run. This avoids all git race
       #    conditions between the runner and manual developer pushes.
@@ -106,7 +121,7 @@ jobs:
         run: mkdocs build
 
       # ----------------------------------------------------------------
-      # 7. Deploy to GitHub Pages
+      # 8. Deploy to GitHub Pages
       #    --no-history keeps gh-pages lean (no accumulating history of
       #    auto-generated content).
       # ----------------------------------------------------------------
@@ -117,7 +132,7 @@ jobs:
         run: mkdocs gh-deploy --force --no-history
 
       # ----------------------------------------------------------------
-      # 8. Print a summary to the Actions run page
+      # 9. Print a summary to the Actions run page
       # ----------------------------------------------------------------
       - name: Job summary
         if: always()
