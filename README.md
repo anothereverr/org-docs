@@ -34,9 +34,11 @@ Go to **Settings → Pages** and set:
 
 Go to **Settings → Developer settings → Personal access tokens → Fine-grained tokens** and create a token with:
 - **Repository access**: All repositories in the organization (or select repos)
-- **Permissions**: `Contents` (read) — to clone wikis; `Contents` (write) on `org-docs` — to push docs
+- **Permissions**: `Contents` (read) — to clone wikis
 
-For a classic PAT: scope `repo` covers everything.
+> The PAT only needs read access. Deploying to GitHub Pages is handled automatically by the built-in `GITHUB_TOKEN`.
+
+For a classic PAT: scope `public_repo` (public wikis) or `repo` (private wikis).
 
 ### 4. Add repository secrets and variables
 
@@ -71,6 +73,11 @@ Go to **Actions → Sync Wikis and Deploy → Run workflow**.
 Options:
 - **Dry run**: discover wikis but do not commit or deploy
 - **Repo filter**: sync only one specific repo (useful for testing)
+
+After each run, open the **Summary** tab of the Actions run to see:
+- Repos synced / skipped / failed
+- ⚠️ Broken links table (repo · file · target) — links whose target page was not found in the wiki
+- 🖼️ Image collisions — images overwritten due to duplicate filenames
 
 ### Test a single repo locally
 
@@ -149,8 +156,9 @@ org-docs/
 
 **Links between pages are broken**
 - Wiki-style links like `[API](API)` are rewritten to `[API](API.md)` at sync time
-- If a link target does not match any known page in that wiki, it is left unchanged and a warning is logged
-- Check the Actions log for `Unresolved wiki link` warnings
+- External links (`https://...`, Google Drive, etc.) are never modified
+- If a link target does not match any known page in that wiki, it is still rewritten to `.md` (to keep navigation within the portal) but flagged as a broken link
+- Check the **Summary** tab of the Actions run for the ⚠️ Broken links table, or search the log for `Wiki link target not found`
 
 **Build fails with `mkdocs build` errors**
 - Check the Actions log for the specific error
