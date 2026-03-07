@@ -88,11 +88,12 @@ jobs:
           MKDOCS_REPO_URL:   ${{ vars.MKDOCS_REPO_URL }}
         run: |
           python scripts/sync_wikis.py \
-            --org        "$GH_ORG" \
-            --docs-dir   docs \
-            --cache-dir  wiki_cache \
-            --parallelism 4 \
-            --log-level  "${LOG_LEVEL:-INFO}"
+            --org          "$GH_ORG" \
+            --docs-dir     docs \
+            --cache-dir    wiki_cache \
+            --parallelism  4 \
+            --log-level    "${LOG_LEVEL:-INFO}" \
+            --summary-file sync_summary.json
 
       # ----------------------------------------------------------------
       # 6. Build MkDocs site directly from the synced docs/ on disk.
@@ -120,15 +121,69 @@ jobs:
       # ----------------------------------------------------------------
       - name: Job summary
         if: always()
+        env:
+          GH_ORG:        ${{ vars.GH_ORG }}
+          EVENT_NAME:    ${{ github.event_name }}
+          DRY_RUN:       ${{ inputs.dry_run || 'false' }}
+          REPO_FILTER:   ${{ inputs.repo_filter || '(all)' }}
+          SITE_URL:      ${{ vars.MKDOCS_SITE_URL }}
         run: |
-          echo "## Wiki Sync Summary" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Field | Value |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Org | \`${{ vars.GH_ORG }}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Triggered by | ${{ github.event_name }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Dry run | ${{ inputs.dry_run || 'false' }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Repo filter | ${{ inputs.repo_filter || '(all)' }} |" >> "$GITHUB_STEP_SUMMARY"
-          if [ -n "${{ vars.MKDOCS_SITE_URL }}" ]; then
-            echo "| Site URL | ${{ vars.MKDOCS_SITE_URL }} |" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          python - <<'PYEOF'
+          import json, os, pathlib
+
+          summary_path = pathlib.Path("sync_summary.json")
+          out = os.environ.get("GITHUB_STEP_SUMMARY", "/dev/stdout")
+
+          def w(line=""):
+              with open(out, "a", encoding="utf-8") as f:
+                  f.write(line + "\n")
+
+          w("## Wiki Sync Summary")
+          w()
+
+          if summary_path.exists():
+              d = json.loads(summary_path.read_text(encoding="utf-8"))
+              w("| Field | Value |")
+              w("|---|---|")
+              w(f"| Repos synced \u2705 | {d['repos_ok']} |")
+              w(f"| Repos skipped \u23ed\ufe0f | {d['repos_skipped']} |")
+              w(f"| Repos failed \u274c | {d['repos_failed']} |")
+              w(f"| Broken links \u26a0\ufe0f | {len(d['broken_links'])} |")
+              w(f"| Image collisions \U0001f5bc\ufe0f | {len(d['image_collisions'])} |")
+
+              if d['broken_links']:
+                  w()
+                  w("### \u26a0\ufe0f Broken links")
+                  w("| Repo | File | Target |")
+                  w("|---|---|---|")
+                  for bl in d['broken_links']:
+                      w(f"| `{bl['repo']}` | `{bl['source_file']}` | `{bl['target']}` |")
+
+              if d['image_collisions']:
+                  w()
+                  w("### \U0001f5bc\ufe0f Image collisions (filename overwritten)")
+                  w("| Repo | Filename |")
+                  w("|---|---|")
+                  for ic in d['image_collisions']:
+                      w(f"| `{ic['repo']}` | `{ic['filename']}` |")
+
+              if d['failed']:
+                  w()
+                  w("### \u274c Failed repos")
+                  for repo in d['failed']:
+                      w(f"- `{repo}`")
+          else:
+              w("_sync\\_summary.json not found \u2014 sync step may have failed before writing it._")
+
+          w()
+          w("---")
+          org       = os.environ.get("GH_ORG", "")
+          event     = os.environ.get("EVENT_NAME", "")
+          dry_run   = os.environ.get("DRY_RUN", "false")
+          repo_filt = os.environ.get("REPO_FILTER", "(all)")
+          site_url  = os.environ.get("SITE_URL", "")
+          meta = f"Org: `{org}`  |  Triggered by: `{event}`  |  Dry run: `{dry_run}`  |  Filter: `{repo_filt}`"
+          if site_url:
+              meta += f"  |  [Site]({site_url})"
+          w(meta)
+          PYEOF

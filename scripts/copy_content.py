@@ -14,10 +14,15 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+from collections import namedtuple
 from pathlib import Path
 from typing import TypedDict
 
-from rewrite_links import build_known_pages, rewrite_content
+from rewrite_links import BrokenLink, build_known_pages, rewrite_content
+
+# Represents an image filename collision within a single repo's wiki:
+# two source images had the same basename → the second one overwrote the first.
+ImageCollision = namedtuple("ImageCollision", ["filename"])
 
 logger = logging.getLogger("wiki-sync.copy")
 
@@ -30,10 +35,12 @@ SKIP_FILES = {"_sidebar.md", "_footer.md", "_header.md"}
 
 class CopyResult(TypedDict):
     slug: str
-    pages: list[str]          # relative paths of .md files written (e.g. "API.md")
-    images: list[str]         # basenames of images copied
+    pages: list[str]               # relative paths of .md files written (e.g. "API.md")
+    images: list[str]              # basenames of images copied
     has_sidebar: bool
-    sidebar_structure: list   # parsed sidebar, consumed by generate_nav.py
+    sidebar_structure: list        # parsed sidebar, consumed by generate_nav.py
+    broken_links: list             # list[BrokenLink] — wiki links with missing targets
+    image_collisions: list         # list[ImageCollision] — duplicate image filenames
 
 
 def copy_wiki_content(
@@ -65,6 +72,8 @@ def copy_wiki_content(
     images: list[str] = []
     sidebar_structure: list = []
     has_sidebar = False
+    broken_links: list = []
+    image_collisions: list = []
 
     for src_file in source_files:
         if not src_file.is_file():
@@ -96,6 +105,7 @@ def copy_wiki_content(
                     slug,
                     name,
                 )
+                image_collisions.append(ImageCollision(filename=name))
             shutil.copy2(src_file, dest_image)
             images.append(name)
             logger.debug("[%s] Copied image: %s", slug, name)
@@ -103,7 +113,8 @@ def copy_wiki_content(
 
         # ---- Markdown files ----
         if ext == ".md":
-            _process_markdown(src_file, dest, slug, known_pages, pages)
+            page_broken = _process_markdown(src_file, dest, slug, known_pages, pages)
+            broken_links.extend(page_broken)
             continue
 
         # ---- Other files (PDFs, etc.): copy to assets/ ----
@@ -113,10 +124,12 @@ def copy_wiki_content(
         logger.debug("[%s] Copied asset: %s", slug, name)
 
     logger.info(
-        "[%s] Copied %d page(s), %d image(s). Sidebar: %s",
+        "[%s] Copied %d page(s), %d image(s), %d broken link(s), %d image collision(s). Sidebar: %s",
         slug,
         len(pages),
         len(images),
+        len(broken_links),
+        len(image_collisions),
         has_sidebar,
     )
 
@@ -126,6 +139,8 @@ def copy_wiki_content(
         images=images,
         has_sidebar=has_sidebar,
         sidebar_structure=sidebar_structure,
+        broken_links=broken_links,
+        image_collisions=image_collisions,
     )
 
 
@@ -135,8 +150,13 @@ def _process_markdown(
     slug: str,
     known_pages: set[str],
     pages: list[str],
-) -> None:
-    """Read, rewrite, and write a single markdown file."""
+) -> list:
+    """
+    Read, rewrite, and write a single markdown file.
+
+    Returns a (possibly empty) list of BrokenLink namedtuples for every wiki
+    link in this page whose target was not found in the local wiki.
+    """
     # Determine destination filename
     src_stem = src_file.stem.lower()
     if src_stem == "home":
@@ -150,18 +170,19 @@ def _process_markdown(
         content = src_file.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         logger.error("[%s] Cannot read %s: %s", slug, src_file.name, exc)
-        return
+        return []
 
-    content = rewrite_content(content, known_pages, slug)
+    content, broken = rewrite_content(content, known_pages, slug, source_file=src_file.name)
 
     try:
         dest_file.write_text(content, encoding="utf-8")
     except OSError as exc:
         logger.error("[%s] Cannot write %s: %s", slug, dest_name, exc)
-        return
+        return broken  # still report broken links even if write failed
 
     pages.append(dest_name)
     logger.debug("[%s] Wrote page: %s", slug, dest_name)
+    return broken
 
 
 # ---------------------------------------------------------------------------

@@ -12,9 +12,15 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections import namedtuple
 from typing import Collection
 
 logger = logging.getLogger("wiki-sync.rewrite")
+
+# Represents a wiki link whose target page was not found in the local wiki.
+# source_file: filename of the .md page that contained the link (e.g. "API.md")
+# target:      the raw link target as written in the wiki (e.g. "missing-page")
+BrokenLink = namedtuple("BrokenLink", ["source_file", "target"])
 
 # ---------------------------------------------------------------------------
 # Regex patterns
@@ -50,9 +56,10 @@ def rewrite_content(
     content: str,
     known_pages: Collection[str],
     slug: str,
-) -> str:
+    source_file: str = "",
+) -> tuple[str, list]:
     """
-    Apply all rewrites to *content* and return the transformed string.
+    Apply all rewrites to *content* and return ``(transformed_content, broken_links)``.
 
     Parameters
     ----------
@@ -63,10 +70,19 @@ def rewrite_content(
         all lowercased. Used for wiki-link resolution.
     slug:
         Repository slug — used only for warning log messages.
+    source_file:
+        Filename of the page being rewritten (e.g. ``"API.md"``).
+        Included in BrokenLink entries so callers can surface it in reports.
+
+    Returns
+    -------
+    tuple[str, list[BrokenLink]]
+        The rewritten content and a (possibly empty) list of BrokenLink
+        namedtuples for every wiki link whose target was not found locally.
     """
     content = _rewrite_images(content)
-    content = _rewrite_wiki_links(content, known_pages, slug)
-    return content
+    content, broken = _rewrite_wiki_links(content, known_pages, slug, source_file)
+    return content, broken
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +136,8 @@ def _rewrite_wiki_links(
     content: str,
     known_pages: Collection[str],
     slug: str,
-) -> str:
+    source_file: str = "",
+) -> tuple[str, list]:
     """
     Convert GitHub wiki-style links to MkDocs-compatible .md links.
 
@@ -136,9 +153,14 @@ def _rewrite_wiki_links(
       - target already ends with .md → normalise Home.md → index.md, else unchanged
       - ALL other bare targets (with or without a match in known_pages) → {target}.md
         Known targets: rewritten silently
-        Unknown targets: rewritten with a WARNING (link may 404, but stays in portal)
+        Unknown targets: rewritten with a WARNING and recorded as a BrokenLink
+
+    Returns
+    -------
+    tuple[str, list[BrokenLink]]
     """
     known_lower = {p.lower() for p in known_pages}
+    broken: list = []
 
     # First pass: rewrite absolute GitHub wiki URLs
     content = _rewrite_github_wiki_urls(content, slug)
@@ -202,9 +224,10 @@ def _rewrite_wiki_links(
             target,
             target,
         )
+        broken.append(BrokenLink(source_file=source_file, target=target))
         return f"[{text}]({target}.md{anchor})"
 
-    return _LINK_RE.sub(_replace, content)
+    return _LINK_RE.sub(_replace, content), broken
 
 
 def _rewrite_github_wiki_urls(content: str, slug: str) -> str:

@@ -24,6 +24,7 @@ Optional env vars:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -52,6 +53,7 @@ def run_sync(
     repo_filter: str = "",
     skip_archived: bool = False,
     clone_timeout: int = 120,
+    summary_file: str | Path | None = None,
 ) -> bool:
     """
     Execute the full sync pipeline.
@@ -186,6 +188,32 @@ def run_sync(
     )
 
     # ------------------------------------------------------------------
+    # 6. Write sync_summary.json (consumed by the Actions job summary step)
+    # ------------------------------------------------------------------
+    if summary_file is not None:
+        all_broken = [
+            {"repo": r["slug"], "source_file": bl.source_file, "target": bl.target}
+            for r in successful_results
+            for bl in r.get("broken_links", [])
+        ]
+        all_collisions = [
+            {"repo": r["slug"], "filename": ic.filename}
+            for r in successful_results
+            for ic in r.get("image_collisions", [])
+        ]
+        summary = {
+            "repos_ok":         len(successful_results),
+            "repos_skipped":    len(skipped_repos),
+            "repos_failed":     len(failed_repos),
+            "broken_links":     all_broken,
+            "image_collisions": all_collisions,
+            "failed":           failed_repos,
+            "skipped":          skipped_repos,
+        }
+        Path(summary_file).write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        logger.info("Summary written to %s", summary_file)
+
+    # ------------------------------------------------------------------
     # Summary
     # ------------------------------------------------------------------
     logger.info("=== Sync finished ===")
@@ -257,6 +285,12 @@ def main() -> None:
         default=os.environ.get("LOG_LEVEL", "INFO"),
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
+    parser.add_argument(
+        "--summary-file",
+        default="",
+        help="Write sync summary JSON to this path (default: no file written). "
+             "The JSON is consumed by the GitHub Actions job summary step.",
+    )
     args = parser.parse_args()
 
     setup_logging(args.log_level)
@@ -281,6 +315,7 @@ def main() -> None:
         repo_filter=args.repo_filter,
         skip_archived=args.skip_archived,
         clone_timeout=args.clone_timeout,
+        summary_file=args.summary_file or None,
     )
 
     sys.exit(0 if success else 1)
