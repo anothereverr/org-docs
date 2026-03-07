@@ -1,8 +1,11 @@
 """
-Discover repositories in a GitHub organization that have wikis enabled.
+Discover repositories in a GitHub organization or personal account that have wikis enabled.
+
+Works with both GitHub organizations (/orgs/{name}/repos) and personal accounts
+(/users/{name}/repos). The account type is auto-detected via the /users/{name} endpoint.
 
 Usage (standalone):
-    python scripts/discover_wikis.py --org MY_ORG [--skip-archived]
+    python scripts/discover_wikis.py --org MY_ORG_OR_USERNAME [--skip-archived]
 
 Requires env var: GH_TOKEN
 """
@@ -14,9 +17,32 @@ import os
 import sys
 import logging
 
+import requests
+
 from utils import get_github_headers, paginate_github, setup_logging, slugify
 
 GITHUB_API = "https://api.github.com"
+
+
+def _resolve_account_type(account: str, headers: dict) -> str:
+    """
+    Return 'org' or 'user' by querying the /users/{account} endpoint.
+    Falls back to 'user' on any error so personal accounts always work.
+    """
+    logger = logging.getLogger("wiki-sync.discover")
+    try:
+        resp = requests.get(f"{GITHUB_API}/users/{account}", headers=headers, timeout=15)
+        if resp.status_code == 200:
+            account_type = resp.json().get("type", "User")
+            if account_type == "Organization":
+                logger.info("Account '%s' is an Organization.", account)
+                return "org"
+            else:
+                logger.info("Account '%s' is a User (personal account).", account)
+                return "user"
+    except Exception as exc:
+        logger.warning("Could not resolve account type for '%s': %s — defaulting to 'user'", account, exc)
+    return "user"
 
 
 def discover_wikis(
@@ -25,7 +51,10 @@ def discover_wikis(
     skip_archived: bool = False,
 ) -> list[dict]:
     """
-    Return a list of repos in *org* that have wikis enabled.
+    Return a list of repos in *org* (organization or personal account) that have wikis enabled.
+
+    Auto-detects whether *org* is a GitHub Organization or a personal User account
+    and calls the appropriate API endpoint.
 
     Each entry:
         {
@@ -41,9 +70,16 @@ def discover_wikis(
     logger = logging.getLogger("wiki-sync.discover")
     headers = get_github_headers(token)
 
-    # /orgs/{org}/repos?type=sources returns non-fork repos only
-    url = f"{GITHUB_API}/orgs/{org}/repos?type=sources&per_page=100"
-    logger.info("Fetching repositories for org '%s'", org)
+    account_type = _resolve_account_type(org, headers)
+
+    if account_type == "org":
+        # Organizations: type=sources excludes forks
+        url = f"{GITHUB_API}/orgs/{org}/repos?type=sources&per_page=100"
+    else:
+        # Personal accounts: type=owner returns only repos owned by the user
+        url = f"{GITHUB_API}/users/{org}/repos?type=owner&per_page=100"
+
+    logger.info("Fetching repositories for %s '%s'", account_type, org)
 
     repos_with_wikis: list[dict] = []
     total = 0
@@ -63,7 +99,7 @@ def discover_wikis(
 
         # GitHub wiki clone URL is always <repo_clone_url without .git>.wiki.git
         # Construct from HTTPS clone URL to avoid SSH key requirements in CI
-        clone_url = repo.get("clone_url", "")  # https://github.com/ORG/REPO.git
+        clone_url = repo.get("clone_url", "")  # https://github.com/OWNER/REPO.git
         if clone_url.endswith(".git"):
             wiki_clone_url = clone_url[:-4] + ".wiki.git"
         else:
