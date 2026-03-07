@@ -110,7 +110,10 @@ jobs:
         if: inputs.dry_run != true
         run: |
           git fetch origin main
-          git rebase origin/main
+          # --autostash saves unstaged changes (docs/, mkdocs.yml written by the
+          # sync step) before rebasing, then restores them after. This lets the
+          # rebase run cleanly even though the sync already modified tracked files.
+          git rebase --autostash origin/main
 
       # ----------------------------------------------------------------
       # 7. Detect whether docs/ or mkdocs.yml changed
