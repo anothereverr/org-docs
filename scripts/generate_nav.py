@@ -40,6 +40,7 @@ MKDOCS_TEMPLATE: dict[str, Any] = {
             "navigation.sections",
             "navigation.top",
             "navigation.indexes",
+            "navigation.breadcrumbs",
             "search.suggest",
             "search.highlight",
             "content.code.copy",
@@ -74,10 +75,13 @@ MKDOCS_TEMPLATE: dict[str, Any] = {
         "pymdownx.inlinehilite",
         "pymdownx.tabbed",
         "admonition",
+        "attr_list",     # required for grid cards and button attributes
+        "md_in_html",    # required for markdown inside <div class="grid cards">
         {"toc": {"permalink": True}},
     ],
     "extra_css": ["_assets/custom.css"],
     "extra_javascript": ["_assets/pdf_button.js"],
+    "hooks": ["hooks/edit_wiki_url.py"],
 }
 
 
@@ -91,6 +95,7 @@ def generate_mkdocs_yml(
     site_name: str = "",
     site_url: str = "",
     repo_url: str = "",
+    org: str = "",
 ) -> None:
     """
     Write a complete mkdocs.yml to *output_path*.
@@ -103,6 +108,9 @@ def generate_mkdocs_yml(
         Destination file (typically the project root mkdocs.yml).
     site_name, site_url, repo_url:
         Optional overrides from environment variables.
+    org:
+        GitHub organization name. Embedded in ``extra.gh_org`` so the
+        ``hooks/edit_wiki_url.py`` hook can construct correct wiki edit URLs.
     """
     config = dict(MKDOCS_TEMPLATE)
 
@@ -112,6 +120,8 @@ def generate_mkdocs_yml(
         config["site_url"] = site_url
     if repo_url:
         config["repo_url"] = repo_url
+    if org:
+        config["extra"] = {"gh_org": org}
 
     config["nav"] = _build_nav(results)
 
@@ -125,6 +135,81 @@ def generate_mkdocs_yml(
 
     output_path.write_text(yml_text, encoding="utf-8")
     logger.info("Wrote mkdocs.yml → %s", output_path)
+
+
+def generate_index_md(
+    results: list[CopyResult],
+    output_path: Path,
+    site_name: str = "",
+) -> None:
+    """
+    Overwrite *output_path* (typically ``docs/index.md``) with a generated
+    landing page that lists every synced wiki as a Material grid card.
+
+    Each card shows the repository display name, the page count, whether it
+    has structured navigation (from ``_sidebar.md``), and a Browse button.
+
+    Requires the ``attr_list`` and ``md_in_html`` markdown extensions
+    (both added to ``MKDOCS_TEMPLATE``).  No-op when *results* is empty
+    so that a manually crafted landing page is preserved on dry runs.
+    """
+    if not results:
+        logger.debug("No sync results — skipping landing page generation")
+        return
+
+    heading = site_name or "Organization Documentation"
+    sorted_results = sorted(results, key=lambda r: r["slug"])
+    repo_count = len(sorted_results)
+
+    lines: list[str] = [
+        f"# {heading}",
+        "",
+        "Centralized portal aggregating GitHub wikis from across the organization. "
+        "Use the search bar to find anything, or browse by repository below.",
+        "",
+        "---",
+        "",
+        f"## Repositories ({repo_count})",
+        "",
+        '<div class="grid cards" markdown>',
+        "",
+    ]
+
+    for result in sorted_results:
+        slug = result["slug"]
+        pages = result["pages"]
+        page_count = len(pages)
+        display_name = _slug_to_title(slug)
+
+        # Prefer index.md as the entry point; fall back to first page alphabetically
+        if "index.md" in pages:
+            entry = f"{slug}/index.md"
+        elif pages:
+            entry = f"{slug}/{pages[0]}"
+        else:
+            continue  # no pages → skip card
+
+        page_label = f"{page_count} page{'s' if page_count != 1 else ''}"
+        nav_label = " · structured nav" if result["has_sidebar"] else ""
+
+        lines += [
+            f"-   **[{display_name}]({entry})**",
+            "",
+            "    ---",
+            "",
+            f"    {page_label}{nav_label}",
+            "",
+            f"    [Browse →]({entry}){{ .md-button }}",
+            "",
+        ]
+
+    lines += [
+        "</div>",
+        "",
+    ]
+
+    output_path.write_text("\n".join(lines), encoding="utf-8")
+    logger.info("Wrote landing page → %s (%d card(s))", output_path, repo_count)
 
 
 # ---------------------------------------------------------------------------

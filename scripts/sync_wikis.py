@@ -40,7 +40,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
 from clone_wiki import clone_wiki
 from copy_content import copy_wiki_content, CopyResult
 from discover_wikis import discover_wikis
-from generate_nav import generate_mkdocs_yml
+from generate_nav import generate_mkdocs_yml, generate_index_md
 from utils import setup_logging
 
 
@@ -291,12 +291,21 @@ def run_sync(
 
     mkdocs_path = docs_dir.parent / "mkdocs.yml"
 
+    site_name = os.environ.get("MKDOCS_SITE_NAME", "")
+
     generate_mkdocs_yml(
         results=successful_results,
         output_path=mkdocs_path,
-        site_name=os.environ.get("MKDOCS_SITE_NAME", ""),
+        site_name=site_name,
         site_url=os.environ.get("MKDOCS_SITE_URL", ""),
         repo_url=os.environ.get("MKDOCS_REPO_URL", ""),
+        org=org,
+    )
+
+    generate_index_md(
+        results=successful_results,
+        output_path=docs_dir / "index.md",
+        site_name=site_name,
     )
 
     # ------------------------------------------------------------------
