@@ -1,0 +1,68 @@
+/* ─── Print / Save as PDF button ──────────────────────────────────────────── */
+
+.pdf-download-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  padding: 0.3em 0.75em;
+  margin: 0.6em 0 1.6em;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  font-family: inherit;
+  color: var(--md-default-fg-color--light);
+  background: transparent;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.2rem;
+  cursor: pointer;
+  transition: color 125ms ease, border-color 125ms ease;
+}
+
+.pdf-download-btn:hover {
+  color: var(--md-accent-fg-color);
+  border-color: var(--md-accent-fg-color);
+}
+
+/* ─── Print / Save as PDF styles ──────────────────────────────────────────── */
+
+@media print {
+  /* Hide navigation chrome — show only the article content */
+  .md-header,
+  .md-sidebar,
+  .md-sidebar--secondary,
+  .md-footer,
+  .md-tabs,
+  .md-top,
+  [data-md-component="announce"],
+  .md-content__button,
+  .pdf-download-btn {
+    display: none !important;
+  }
+
+  /* Let the content fill the full page width */
+  .md-grid {
+    max-width: 100% !important;
+  }
+
+  .md-main__inner,
+  .md-content {
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Readable body text for print */
+  body {
+    font-size: 11pt;
+    color: #000;
+  }
+
+  /* Avoid splitting code blocks across pages */
+  pre {
+    page-break-inside: avoid;
+  }
+
+  /* Avoid orphaned headings at the bottom of a page */
+  h1, h2, h3, h4 {
+    page-break-after: avoid;
+  }
+}
